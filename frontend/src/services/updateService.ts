@@ -38,7 +38,12 @@ export class UpdateService {
    * @param force Force check even if recently checked
    * @returns Promise with update information
    */
-  async checkForUpdates(force = false): Promise<UpdateInfo> {
+  // MLX fork: auto-updates are disabled so the custom build is never replaced.
+  async checkForUpdates(_force = false): Promise<UpdateInfo> {
+    return { available: false, currentVersion: await getVersion() };
+  }
+
+  async checkForUpdatesUpstream(force = false): Promise<UpdateInfo> {
     // Prevent concurrent update checks
     if (this.updateCheckInProgress) {
       throw new Error('Update check already in progress');

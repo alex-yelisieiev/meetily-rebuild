@@ -14,6 +14,10 @@ use tokio::fs;
 use tokio::io::AsyncWriteExt;
 use crate::config::WHISPER_MODEL_CATALOG;
 use super::acceleration::{whisper_context_acceleration_for, WhisperCompiledBackend};
+use super::mlx_sidecar::{MlxSidecar, MLX_MODEL_NAME, MLX_MODEL_DIRNAME, mlx_model_ready, mlx_model_size_mb};
+
+/// Stop the MLX sidecar after this much time without audio.
+const MLX_IDLE_TIMEOUT: Duration = Duration::from_secs(300);
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum ModelStatus {
@@ -77,6 +81,9 @@ pub struct WhisperEngine {
     transcription_count: Arc<RwLock<u64>>,
     // A model remains active until its owning worker has completed cleanup.
     active_downloads: Arc<Mutex<HashMap<String, Arc<ActiveDownload>>>>,
+    // MLX Whisper sidecar (started on demand, stopped when idle or unloaded)
+    mlx: Arc<Mutex<Option<MlxSidecar>>>,
+    mlx_last_used: Arc<std::sync::Mutex<std::time::Instant>>,
     #[cfg(test)]
     download_state_test_hook: std::sync::Mutex<Option<Arc<DownloadStateTestHook>>>,
 }
@@ -192,6 +199,8 @@ impl WhisperEngine {
             // Performance optimization: reduce logging frequency
             transcription_count: Arc::new(RwLock::new(0)),
             active_downloads: Arc::new(Mutex::new(HashMap::new())),
+            mlx: Arc::new(Mutex::new(None)),
+            mlx_last_used: Arc::new(std::sync::Mutex::new(std::time::Instant::now())),
             #[cfg(test)]
             download_state_test_hook: std::sync::Mutex::new(None),
         };
@@ -266,6 +275,20 @@ impl WhisperEngine {
             models.push(model_info);
         }
         
+        {
+            let dir = models_dir.join(MLX_MODEL_DIRNAME);
+            let status = if mlx_model_ready(&dir) { ModelStatus::Available } else { ModelStatus::Missing };
+            models.push(ModelInfo {
+                name: MLX_MODEL_NAME.to_string(),
+                size_mb: mlx_model_size_mb(&dir).max(2950) as u32,
+                path: dir,
+                accuracy: "High".to_string(),
+                speed: "Fast".to_string(),
+                status,
+                description: "Whisper large-v3 on Apple GPU via MLX (mlx-community/whisper-large-v3-mlx)".to_string(),
+            });
+        }
+
         let active_downloads = self.active_downloads.lock().await;
         #[cfg(test)]
         if let Some(hook) = self.test_hook() {
@@ -299,6 +322,20 @@ impl WhisperEngine {
             .ok_or_else(|| anyhow!("Model {} not found", model_name))?;
 
         match model_info.status {
+            ModelStatus::Available if model_name == MLX_MODEL_NAME => {
+                let path = model_info.path.clone();
+                drop(models);
+                if self.current_model.read().await.as_deref() == Some(MLX_MODEL_NAME)
+                    && self.mlx.lock().await.is_some() {
+                    return Ok(());
+                }
+                self.unload_model().await;
+                self.ensure_mlx(&path).await?;
+                *self.current_model.write().await = Some(MLX_MODEL_NAME.to_string());
+                self.spawn_mlx_idle_reaper();
+                log::info!("Successfully loaded model: {} (MLX sidecar on Apple GPU)", MLX_MODEL_NAME);
+                Ok(())
+            },
             ModelStatus::Available => {
                 // FIX 5: Check if this model is already loaded
                 if let Some(current_model) = self.current_model.read().await.as_ref() {
@@ -379,7 +416,12 @@ impl WhisperEngine {
 
     pub async fn unload_model(&self) -> bool  {
         let mut ctx_guard = self.current_context.write().await;
-        let unloaded = ctx_guard.take().is_some();
+        let mut unloaded = ctx_guard.take().is_some();
+        if let Some(sc) = self.mlx.lock().await.take() {
+            sc.shutdown().await;
+            log::info!("MLX sidecar stopped");
+            unloaded = true;
+        }
         if unloaded {
             log::info!("📉Whisper model unloaded");
         }
@@ -396,6 +438,7 @@ impl WhisperEngine {
     
     pub async fn is_model_loaded(&self) -> bool {
         self.current_context.read().await.is_some()
+            || self.current_model.read().await.as_deref() == Some(MLX_MODEL_NAME)
     }
     
     // Enhanced function to clean repetitive text patterns and meaningless outputs
@@ -549,6 +592,11 @@ impl WhisperEngine {
     
     /// Transcribe audio with streaming support for partial results and adaptive quality
     pub async fn transcribe_audio_with_confidence(&self, audio_data: Vec<f32>, language: Option<String>) -> Result<(String, f32, bool)> {
+        if self.current_model.read().await.as_deref() == Some(MLX_MODEL_NAME) {
+            let is_partial = (audio_data.len() as f64 / 16000.0) < 15.0;
+            let (t, c) = self.transcribe_mlx(&audio_data, language).await?;
+            return Ok((t, c, is_partial));
+        }
         let ctx_lock = self.current_context.read().await;
         let ctx = ctx_lock.as_ref()
             .ok_or_else(|| anyhow!("No model loaded. Please load a model first."))?;
@@ -666,6 +714,9 @@ impl WhisperEngine {
     }
 
     pub async fn transcribe_audio(&self, audio_data: Vec<f32>, language: Option<String>) -> Result<String> {
+        if self.current_model.read().await.as_deref() == Some(MLX_MODEL_NAME) {
+            return Ok(self.transcribe_mlx(&audio_data, language).await?.0);
+        }
         let ctx_lock = self.current_context.read().await;
         let ctx = ctx_lock.as_ref()
             .ok_or_else(|| anyhow!("No model loaded. Please load a model first."))?;
@@ -838,6 +889,65 @@ impl WhisperEngine {
         Ok(cleaned_result)
     }
     
+    async fn ensure_mlx(&self, model_dir: &std::path::Path) -> Result<()> {
+        let mut guard = self.mlx.lock().await;
+        if guard.is_none() {
+            *guard = Some(MlxSidecar::spawn(model_dir).await?);
+        }
+        *self.mlx_last_used.lock().unwrap() = std::time::Instant::now();
+        Ok(())
+    }
+
+    fn spawn_mlx_idle_reaper(&self) {
+        let mlx = self.mlx.clone();
+        let last = self.mlx_last_used.clone();
+        tokio::spawn(async move {
+            loop {
+                tokio::time::sleep(Duration::from_secs(30)).await;
+                let mut guard = mlx.lock().await;
+                if guard.is_none() { return; }
+                if last.lock().unwrap().elapsed() >= MLX_IDLE_TIMEOUT {
+                    if let Some(sc) = guard.take() { sc.shutdown().await; }
+                    log::info!("MLX sidecar stopped after idle timeout (restarts on next audio)");
+                    return;
+                }
+            }
+        });
+    }
+
+    async fn transcribe_mlx(&self, audio_data: &[f32], language: Option<String>) -> Result<(String, f32)> {
+        let dir = self.models_dir.join(MLX_MODEL_DIRNAME);
+        let respawned = self.mlx.lock().await.is_none();
+        self.ensure_mlx(&dir).await?;
+        if respawned { self.spawn_mlx_idle_reaper(); }
+        let lang = match language.as_deref() { Some("auto") | Some("auto-translate") | None => None, Some(l) => Some(l.to_string()) };
+        let result = {
+            let mut guard = self.mlx.lock().await;
+            let sc = guard.as_mut().ok_or_else(|| anyhow!("MLX sidecar not running"))?;
+            sc.transcribe(audio_data, lang.as_deref()).await
+        };
+        *self.mlx_last_used.lock().unwrap() = std::time::Instant::now();
+        let (text, segments) = match result {
+            Ok(r) => r,
+            Err(e) => {
+                // Drop a broken sidecar so the next call starts a fresh one
+                if let Some(sc) = self.mlx.lock().await.take() { sc.shutdown().await; }
+                return Err(e);
+            }
+        };
+        let kept: Vec<String> = segments.iter()
+            .filter(|s| s.no_speech_prob.unwrap_or(0.0) < 0.6 || s.avg_logprob.unwrap_or(0.0) > -1.0)
+            .map(|s| s.text.trim().to_string())
+            .filter(|t| !t.is_empty())
+            .collect();
+        let joined = if segments.is_empty() { text } else { kept.join(" ") };
+        let conf = if segments.is_empty() { 0.0 } else {
+            let m = segments.iter().map(|s| s.avg_logprob.unwrap_or(-1.0)).sum::<f64>() / segments.len() as f64;
+            (m.exp() as f32).clamp(0.0, 1.0)
+        };
+        Ok((Self::clean_repetitive_text(joined.trim()), conf))
+    }
+
     pub async fn get_models_directory(&self) -> PathBuf {
         self.models_dir.clone()
     }

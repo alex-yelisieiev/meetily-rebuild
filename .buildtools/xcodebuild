@@ -1,0 +1,28 @@
+#!/bin/bash
+# Minimal xcodebuild stand-in for cidre's pomace static libs (no full Xcode installed).
+set -e
+targets=(); conf=Release; arch=arm64; sdk=macosx; symroot=""; dt=""
+while [ $# -gt 0 ]; do
+  case "$1" in
+    -target) targets+=("$2"); shift 2;;
+    -configuration) conf="$2"; shift 2;;
+    -arch) arch="$2"; shift 2;;
+    -sdk) sdk="$2"; shift 2;;
+    -project) shift 2;;
+    SYMROOT=*) symroot="${1#SYMROOT=}"; shift;;
+    MACOSX_DEPLOYMENT_TARGET=*) dt="${1#*=}"; shift;;
+    *) shift;;
+  esac
+done
+out="$symroot/$conf"; mkdir -p "$out"
+SDK=$(xcrun --sdk macosx --show-sdk-path)
+for t in "${targets[@]}"; do
+  tmp=$(mktemp -d)
+  for m in pomace/"$t"/*.m; do
+    clang -c -x objective-c -fobjc-arc -fmodules -Os -arch "$arch" -isysroot "$SDK" \
+      ${dt:+-mmacosx-version-min=$dt} -Ipomace "$m" -o "$tmp/$(basename "$m" .m).o"
+  done
+  ar rcs "$out/lib$t.a" "$tmp"/*.o
+  rm -rf "$tmp"
+  echo "shim: built $out/lib$t.a"
+done
