@@ -8,6 +8,7 @@ struct MeetingDetailView: View {
     @State private var title = ""
     @State private var confirmDelete = false
     @State private var showRetranscribe = false
+    @State private var showPrompt = false
     @FocusState private var titleFocused: Bool
 
     enum Tab: String, CaseIterable, Identifiable {
@@ -23,7 +24,6 @@ struct MeetingDetailView: View {
         ScrollView {
             VStack(alignment: .leading, spacing: 18) {
                 header
-                if !model.editing { contextField }
                 switch tab {
                 case .summary: summary
                 case .transcript: transcript
@@ -81,6 +81,7 @@ struct MeetingDetailView: View {
                         }
                     }
                     Divider()
+                    Button(model.customPrompt.isEmpty ? "Summary Prompt…" : "Summary Prompt (set)…") { showPrompt = true }
                     SettingsLink { Text("Summary Model…") }
                 } label: {
                     Label("Summary Options", systemImage: "slider.horizontal.3")
@@ -114,6 +115,32 @@ struct MeetingDetailView: View {
                 }
                 .help("Delete this meeting")
             }
+        }
+        .sheet(isPresented: $showPrompt) {
+            VStack(alignment: .leading, spacing: 14) {
+                Text("Summary Prompt").font(.title2.weight(.semibold))
+                TextEditor(text: $model.customPrompt)
+                    .font(.body)
+                    .scrollContentBackground(.hidden)
+                    .padding(8)
+                    .frame(height: 140)
+                    .glassEffect(.regular, in: .rect(cornerRadius: 12))
+                    .overlay(alignment: .topLeading) {
+                        if model.customPrompt.isEmpty {
+                            Text("People involved, meeting overview, objective…")
+                                .foregroundStyle(.tertiary).padding(.horizontal, 13).padding(.vertical, 8)
+                                .allowsHitTesting(false)
+                        }
+                    }
+                HStack {
+                    Button("Clear") { model.customPrompt = "" }.disabled(model.customPrompt.isEmpty)
+                    Spacer()
+                    Button("Done") { showPrompt = false }
+                        .buttonStyle(.glassProminent).keyboardShortcut(.defaultAction)
+                }
+            }
+            .padding(24)
+            .frame(width: 460)
         }
         .sheet(isPresented: $showRetranscribe) {
             RetranscribeSheet(meetingId: model.meetingId, folder: model.meta?.folder_path ?? "")
@@ -218,19 +245,6 @@ struct MeetingDetailView: View {
             }
             .frame(maxWidth: .infinity)
             .padding(.vertical, 40)
-        }
-    }
-
-    private var contextField: some View {
-        VStack(alignment: .leading, spacing: 6) {
-            Label("Summary Prompt", systemImage: "text.bubble")
-                .font(.subheadline.weight(.semibold))
-                .foregroundStyle(.secondary)
-            TextField("Add context for the AI summary: people involved, meeting overview, objective…", text: $model.customPrompt, axis: .vertical)
-                .lineLimit(2...6)
-                .textFieldStyle(.plain)
-                .padding(12)
-                .glassEffect(.regular, in: .rect(cornerRadius: 14))
         }
     }
 

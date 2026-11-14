@@ -287,7 +287,7 @@ final class AppModel {
 
         phase = .finishing("Saving meeting…")
         let segments = liveSegments
-            .filter { !$0.isPartial && !$0.text.isEmpty }
+            .filter { !$0.text.isEmpty }
             .sorted { $0.start == $1.start ? $0.sequence < $1.sequence : $0.start < $1.start }
         guard !segments.isEmpty else {
             phase = .idle
@@ -323,19 +323,15 @@ final class AppModel {
     private func handle(event: String, payload: Any) {
         switch event {
         case "transcript-update":
-            guard var seg = LiveSegment(payload: payload), !seg.text.isEmpty else { return }
+            // Same as the original UI: every chunk is its own line (the engine flags
+            // low-confidence chunks as "partial", but they are never re-sent), so keep them all.
+            guard let seg = LiveSegment(payload: payload), !seg.text.isEmpty else { return }
             if let i = liveSegments.firstIndex(where: { $0.sequence == seg.sequence }) {
                 liveSegments[i] = seg
             } else {
-                // A final segment replaces the trailing partial preview.
-                if !seg.isPartial, let last = liveSegments.last, last.isPartial { liveSegments.removeLast() }
-                if seg.isPartial, let last = liveSegments.last, last.isPartial {
-                    seg = LiveSegment(copying: seg); liveSegments[liveSegments.count - 1] = seg
-                } else {
-                    liveSegments.append(seg)
-                }
+                liveSegments.append(seg)
             }
-            if !seg.isPartial { scheduleSnapshot() }
+            scheduleSnapshot()
         case "recording-stopped":
             if let d = payload as? [String: Any] {
                 stoppedFolder = d["folder_path"] as? String
@@ -458,7 +454,7 @@ final class AppModel {
 
     private func saveSnapshot() {
         guard isRecording else { return }
-        let segs = liveSegments.filter { !$0.isPartial && !$0.text.isEmpty }.map {
+        let segs = liveSegments.filter { !$0.text.isEmpty }.map {
             PendingRecording.Segment(sequence: $0.sequence, text: $0.text, timestamp: $0.timestamp, start: $0.start, end: $0.end, duration: $0.duration)
         }
         PendingRecording.save(.init(name: currentMeetingName, folder: currentFolder, startedAt: recordingStartedAt ?? Date(), segments: segs))
