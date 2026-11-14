@@ -14,7 +14,7 @@ rm -rf "$OUT"
 mkdir -p "$OUT/Contents/MacOS" "$OUT/Contents/Resources" "$OUT/Contents/Library/Engine"
 cp .build/release/Meetily "$OUT/Contents/MacOS/Meetily"
 cp Info.plist "$OUT/Contents/Info.plist"
-cp "$ENGINE_SRC/Contents/Resources/app_icon.icns" "$OUT/Contents/Resources/AppIcon.icns"
+cp Resources/AppIcon.icns "$OUT/Contents/Resources/AppIcon.icns"
 ditto "$ENGINE_SRC" "$ENGINE"
 
 # The engine never shows UI of its own.
