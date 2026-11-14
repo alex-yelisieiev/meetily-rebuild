@@ -41,8 +41,10 @@ struct MeetingDetailView: View {
                     ForEach(Tab.allCases) { Text($0.rawValue).tag($0) }
                 }
                 .pickerStyle(.segmented)
-                .frame(width: 220)
+                .labelsHidden()
+                .fixedSize()
             }
+            .sharedBackgroundVisibility(.hidden)
             ToolbarItemGroup {
                 if model.isSummarizing {
                     Button { Task { await model.cancelSummary() } } label: {
