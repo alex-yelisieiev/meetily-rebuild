@@ -9,6 +9,7 @@ struct MarkdownView: View {
     var body: some View {
         Markdown(markdown)
             .markdownTheme(.basic)
+            .markdownTextStyle { FontSize(16) }
             // Models put "**Heading**" and its text on consecutive lines; show them as separate lines.
             .markdownSoftBreakMode(.lineBreak)
             .textSelection(.enabled)
