@@ -34,6 +34,10 @@ struct ContentView: View {
                 .searchable(text: $app.searchText, placement: .sidebar, prompt: "Search transcripts")
                 .toolbar {
                     ToolbarItem(placement: .primaryAction) { RecordToolbarButton() }
+                    ToolbarItem(placement: .primaryAction) {
+                        SettingsLink { Label("Settings", systemImage: "gearshape") }
+                            .help("Settings (⌘,)")
+                    }
                 }
             }
         }
