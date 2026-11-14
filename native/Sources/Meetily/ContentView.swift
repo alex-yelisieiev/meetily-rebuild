@@ -32,6 +32,7 @@ struct ContentView: View {
                     DetailRouter()
                 }
                 .searchable(text: $app.searchText, placement: .sidebar, prompt: "Search transcripts")
+                .toolbarBackgroundVisibility(.hidden, for: .windowToolbar)
                 .toolbar {
                     ToolbarItem(placement: .primaryAction) { RecordToolbarButton() }
                     ToolbarItem(placement: .primaryAction) {
