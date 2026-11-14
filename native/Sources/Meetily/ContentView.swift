@@ -132,19 +132,7 @@ struct WelcomeView: View {
                 .frame(maxWidth: 440)
                 .glassEffect(.regular, in: .rect(cornerRadius: 20))
             }
-            if !app.meetingsLoaded {
-                EmptyView()
-            } else if app.meetings.isEmpty {
-                Button {
-                    Task { await app.startRecording() }
-                } label: {
-                    Label("Start Recording", systemImage: "record.circle").padding(.horizontal, 6)
-                }
-                .buttonStyle(.glassProminent)
-                .tint(.red)
-                .controlSize(.large)
-                .disabled(app.isRecording)
-            } else if app.recovery == nil {
+            if app.meetingsLoaded && app.recovery == nil {
                 Image(systemName: "waveform.badge.mic")
                     .font(.system(size: 48))
                     .foregroundStyle(.quaternary)
