@@ -23,6 +23,7 @@ struct MeetingDetailView: View {
         ScrollView {
             VStack(alignment: .leading, spacing: 18) {
                 header
+                if !model.editing { contextField }
                 switch tab {
                 case .summary: summary
                 case .transcript: transcript
@@ -201,13 +202,11 @@ struct MeetingDetailView: View {
                     .buttonStyle(.glass)
                     .disabled(model.isSummarizing)
             }
-            contextField
         } else if !model.isSummarizing && !model.loading {
             VStack(spacing: 16) {
                 Text("No summary yet")
                     .font(.title3.weight(.medium))
                     .foregroundStyle(.secondary)
-                contextField.frame(maxWidth: 520)
                 Button {
                     Task { await model.generateSummary(template: app.summaryTemplate) }
                 } label: {
@@ -223,11 +222,16 @@ struct MeetingDetailView: View {
     }
 
     private var contextField: some View {
-        TextField("Context for the AI: people involved, goal of the meeting…", text: $model.customPrompt, axis: .vertical)
-            .lineLimit(2...6)
-            .textFieldStyle(.plain)
-            .padding(12)
-            .glassEffect(.regular, in: .rect(cornerRadius: 14))
+        VStack(alignment: .leading, spacing: 6) {
+            Label("Summary Prompt", systemImage: "text.bubble")
+                .font(.subheadline.weight(.semibold))
+                .foregroundStyle(.secondary)
+            TextField("Add context for the AI summary: people involved, meeting overview, objective…", text: $model.customPrompt, axis: .vertical)
+                .lineLimit(2...6)
+                .textFieldStyle(.plain)
+                .padding(12)
+                .glassEffect(.regular, in: .rect(cornerRadius: 14))
+        }
     }
 
     private func progressCard(_ text: String, _ percent: Double?, cancel: @escaping () -> Void) -> some View {
