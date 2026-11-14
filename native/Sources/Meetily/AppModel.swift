@@ -55,6 +55,7 @@ final class AppModel {
     var audioLevels: [String: Double] = [:]
     var recovery: PendingRecording.Snapshot?
     private var snapshotTask: Task<Void, Never>?
+    @ObservationIgnored private var lastLevelPublish = Date.distantPast
     private var currentFolder: String?
 
     struct JobProgress: Equatable { var percent: Double; var message: String; var failed: String? }
@@ -211,6 +212,7 @@ final class AppModel {
     func startRecording() async {
         guard phase == .idle, engineState == .ready else { return }
         liveSegments = []
+        recordingStartedAt = nil
         stoppedFolder = nil
         stoppedName = nil
         transcriptionCompleted = false
@@ -262,6 +264,7 @@ final class AppModel {
 
     func stopRecording() async {
         guard phase == .recording || phase == .paused else { return }
+        if pausedAt == nil { pausedAt = Date() } // freeze the clock while finishing
         phase = .finishing("Stopping…")
         do {
             let ts = Int(Date().timeIntervalSince1970 * 1000)
@@ -402,9 +405,15 @@ final class AppModel {
             downloadRevision += 1
         case "audio-levels":
             guard let d = payload as? [String: Any], let levels = d["levels"] as? [[String: Any]] else { return }
+            // Levels arrive many times a second; only publish visible changes, at most ~8×/s,
+            // so the recording screen isn't re-rendered constantly (that swallowed clicks).
+            let now = Date()
+            guard now.timeIntervalSince(lastLevelPublish) > 0.12 else { return }
+            var next = audioLevels
             for l in levels {
-                if let n = l["device_name"] as? String { audioLevels[n] = Self.num(l["rms_level"]) }
+                if let n = l["device_name"] as? String { next[n] = (Self.num(l["rms_level"]) * 50).rounded() / 50 }
             }
+            if next != audioLevels { audioLevels = next; lastLevelPublish = now }
         default:
             break
         }

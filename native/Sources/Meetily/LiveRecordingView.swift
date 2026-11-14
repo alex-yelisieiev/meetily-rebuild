@@ -8,7 +8,7 @@ struct LiveRecordingView: View {
             ScrollView {
                 LazyVStack(alignment: .leading, spacing: 14) {
                     header
-                    if app.liveSegments.isEmpty {
+                    if app.phase == .starting {
                         ProgressView().controlSize(.small).padding(.top, 8)
                     }
                     ForEach(app.liveSegments) { seg in
@@ -35,9 +35,7 @@ struct LiveRecordingView: View {
             Text(app.currentMeetingName)
                 .font(.largeTitle.weight(.semibold))
             Spacer()
-            if let level = app.audioLevels[app.micDevice], level > 0 {
-                ProgressView(value: min(level, 1)).frame(width: 80)
-            }
+            MicLevelMeter()
         }
         .padding(.bottom, 6)
     }
@@ -72,6 +70,7 @@ struct LiveRecordingView: View {
                         Image(systemName: app.phase == .paused ? "play.fill" : "pause.fill")
                             .font(.title3)
                             .frame(width: 46, height: 46)
+                            .contentShape(.circle)
                     }
                     .buttonStyle(.plain)
                     .glassEffect(.regular.interactive(), in: .circle)
@@ -85,6 +84,7 @@ struct LiveRecordingView: View {
                             .padding(.horizontal, 20)
                             .frame(height: 46)
                             .foregroundStyle(.white)
+                            .contentShape(.capsule)
                     }
                     .buttonStyle(.plain)
                     .glassEffect(.regular.tint(.red).interactive(), in: .capsule)
@@ -97,6 +97,15 @@ struct LiveRecordingView: View {
                 }
             }
         }
+    }
+}
+
+/// Its own view so frequent level updates only redraw the meter, not the whole screen.
+private struct MicLevelMeter: View {
+    @Environment(AppModel.self) private var app
+    var body: some View {
+        let level = app.audioLevels[app.micDevice] ?? 0
+        ProgressView(value: min(level, 1)).frame(width: 80).opacity(level > 0 ? 1 : 0)
     }
 }
 
