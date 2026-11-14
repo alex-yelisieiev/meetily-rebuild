@@ -1,10 +1,14 @@
 name: Build Meetily (macOS)
 
-# Builds the native SwiftUI app with the Rust engine embedded and uploads Meetily.app as a zip.
+# Builds the native SwiftUI app with the Rust engine embedded, packs it into a DMG
+# and publishes it as a GitHub Release (tag build-<run number>).
 on:
   push:
     branches: [main]
   workflow_dispatch:
+
+permissions:
+  contents: write
 
 concurrency:
   group: build-${{ github.ref }}
@@ -65,15 +69,27 @@ jobs:
         working-directory: native
         run: ./build-app.sh
 
-      - name: Package
+      - name: Package DMG
         working-directory: native/build
         run: |
           VERSION=$(/usr/libexec/PlistBuddy -c "Print :CFBundleShortVersionString" Meetily.app/Contents/Info.plist)
-          ditto -c -k --keepParent Meetily.app "Meetily-$VERSION-arm64.zip"
-          echo "ZIP=Meetily-$VERSION-arm64.zip" >> "$GITHUB_ENV"
+          DMG="Meetily-$VERSION-arm64.dmg"
+          mkdir dmg
+          cp -R Meetily.app dmg/
+          ln -s /Applications dmg/Applications
+          hdiutil create -volname "Meetily" -srcfolder dmg -fs HFS+ -format UDZO -ov "$DMG"
+          echo "DMG=$DMG" >> "$GITHUB_ENV"
+          echo "VERSION=$VERSION" >> "$GITHUB_ENV"
 
-      - uses: actions/upload-artifact@v7
-        with:
-          name: Meetily-macOS-arm64
-          path: native/build/${{ env.ZIP }}
-          if-no-files-found: error
+      - name: Publish release
+        working-directory: native/build
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          TAG="build-${{ github.run_number }}"
+          gh release create "$TAG" "$DMG" \
+            --repo "${{ github.repository }}" \
+            --target "${{ github.sha }}" \
+            --title "Meetily $VERSION (build ${{ github.run_number }})" \
+            --notes "Automated build of ${{ github.sha }}. Apple Silicon only. Not signed or notarized: the first time, right-click Meetily and choose Open." \
+            --latest
