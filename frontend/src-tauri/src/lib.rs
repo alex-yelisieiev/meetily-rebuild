@@ -54,6 +54,7 @@ pub mod summary;
 pub mod tray;
 pub mod utils;
 pub mod whisper_engine;
+pub mod native_bridge;
 
 use audio::{list_audio_devices, AudioDevice, trigger_audio_permission};
 use log::{error as log_error, info as log_info};
@@ -506,9 +507,26 @@ pub fn run() {
 
             log::info!("Application setup complete");
 
-            // Initialize system tray
-            if let Err(e) = tray::create_tray(_app.handle()) {
-                log::error!("Failed to create system tray: {}", e);
+            if native_bridge::is_headless() {
+                // Engine mode for the native SwiftUI app: no visible UI, no Dock icon, no tray.
+                #[cfg(target_os = "macos")]
+                _app.set_activation_policy(tauri::ActivationPolicy::Prohibited);
+                tauri::WebviewWindowBuilder::new(
+                    _app,
+                    native_bridge::HIDDEN_WEBVIEW_LABEL,
+                    tauri::WebviewUrl::External("about:blank".parse().unwrap()),
+                )
+                .visible(false)
+                .build()?;
+                native_bridge::start(_app.handle().clone());
+                native_bridge::exit_with_parent(_app.handle().clone());
+            } else {
+                let cfg = _app.config().app.windows[0].clone();
+                tauri::WebviewWindowBuilder::from_config(_app.handle(), &cfg)?.build()?;
+                // Initialize system tray
+                if let Err(e) = tray::create_tray(_app.handle()) {
+                    log::error!("Failed to create system tray: {}", e);
+                }
             }
 
             // Initialize notification system with proper defaults
