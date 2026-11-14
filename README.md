@@ -4,6 +4,13 @@ A native macOS meeting recorder that transcribes and summarizes your meetings on
 
 Recordings, transcripts and summaries stay on your machine unless you choose a cloud model for summaries.
 
+![Meeting summary](docs/screenshots/summary.png)
+
+<p>
+  <img src="docs/screenshots/transcript.png" alt="Meeting transcript" width="58%">
+  <img src="docs/screenshots/settings.png" alt="Transcription models in Settings" width="38%">
+</p>
+
 ## Features
 
 - **Record and transcribe live.** Captures your microphone and system audio, and you can pick input devices in Settings.
