@@ -64,7 +64,7 @@ struct SidebarView: View {
         }
         .listStyle(.sidebar)
         .overlay {
-            if app.meetings.isEmpty && app.searchText.isEmpty && !app.isRecording {
+            if app.meetingsLoaded && app.meetings.isEmpty && app.searchText.isEmpty && !app.isRecording {
                 Text("No meetings yet").foregroundStyle(.secondary)
             }
         }

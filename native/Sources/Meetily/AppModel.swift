@@ -16,6 +16,7 @@ final class AppModel {
     let engine = EngineClient.shared
     var engineState: EngineState = .starting
     var meetings: [Meeting] = []
+    var meetingsLoaded = false
     var selection: String?
     var searchText = "" { didSet { scheduleSearch() } }
     var searchHits: [SearchHit] = []
@@ -130,6 +131,7 @@ final class AppModel {
         }
         result.sort { ($0.createdAt ?? .distantPast) > ($1.createdAt ?? .distantPast) }
         meetings = result
+        meetingsLoaded = true
     }
 
     func loadRecordingPrefs() async {

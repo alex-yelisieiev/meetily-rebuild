@@ -132,7 +132,9 @@ struct WelcomeView: View {
                 .frame(maxWidth: 440)
                 .glassEffect(.regular, in: .rect(cornerRadius: 20))
             }
-            if app.meetings.isEmpty {
+            if !app.meetingsLoaded {
+                EmptyView()
+            } else if app.meetings.isEmpty {
                 Button {
                     Task { await app.startRecording() }
                 } label: {
