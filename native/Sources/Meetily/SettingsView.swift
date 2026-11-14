@@ -12,6 +12,7 @@ struct SettingsView: View {
             Tab("About", systemImage: "info.circle") { AboutSettings() }
         }
         .frame(width: 640, height: 560)
+        .toolbarBackgroundVisibility(.visible, for: .windowToolbar)
     }
 }
 
