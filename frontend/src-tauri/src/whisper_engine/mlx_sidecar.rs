@@ -1,5 +1,5 @@
 //! MLX Whisper backend (Apple Silicon GPU) via a persistent Python sidecar.
-//! The sidecar lives in ~/Desktop/code/transcribe-meetily (uv-managed venv) and loads
+//! The sidecar lives in ~/Library/Application Support/com.meetily.ai/mlx-whisper-runtime (uv-managed venv) and loads
 //! the mlx-community/whisper-large-v3-mlx weights from Meetily's models folder.
 
 use anyhow::{anyhow, Result};
@@ -41,7 +41,7 @@ fn project_dir() -> PathBuf {
     }
     dirs::home_dir()
         .unwrap_or_else(|| PathBuf::from("/"))
-        .join("Desktop/code/transcribe-meetily")
+        .join("Library/Application Support/com.meetily.ai/mlx-whisper-runtime")
 }
 
 /// The MLX model is a directory (config.json + weights.npz/safetensors), not a ggml file.
