@@ -13,6 +13,7 @@ struct MarkdownView: View {
         case rule
         case code(String)
         case paragraph(String)
+        case table([[String]])
     }
 
     var body: some View {
@@ -59,7 +60,31 @@ struct MarkdownView: View {
                 .background(.quaternary.opacity(0.5), in: .rect(cornerRadius: 8))
         case .paragraph(let text):
             inline(text).lineSpacing(3)
+        case .table(let rows):
+            table(rows)
         }
+    }
+
+    private func table(_ rows: [[String]]) -> some View {
+        let columns = rows.map(\.count).max() ?? 0
+        return ScrollView(.horizontal, showsIndicators: false) {
+            Grid(alignment: .topLeading, horizontalSpacing: 18, verticalSpacing: 8) {
+                ForEach(Array(rows.enumerated()), id: \.offset) { i, row in
+                    GridRow {
+                        ForEach(0..<columns, id: \.self) { c in
+                            inline(c < row.count ? row[c] : "")
+                                .fontWeight(i == 0 ? .semibold : .regular)
+                                .foregroundStyle(i == 0 ? .secondary : .primary)
+                                .frame(minWidth: 40, maxWidth: 320, alignment: .leading)
+                                .fixedSize(horizontal: false, vertical: true)
+                        }
+                    }
+                    if i == 0 { Divider().gridCellUnsizedAxes(.horizontal) }
+                }
+            }
+            .padding(12)
+        }
+        .background(.quaternary.opacity(0.35), in: .rect(cornerRadius: 10))
     }
 
     private func inline(_ text: String) -> Text {
@@ -74,9 +99,16 @@ struct MarkdownView: View {
         var result: [Block] = []
         var paragraph: [String] = []
         var code: [String]?
+        var tableRows: [[String]] = []
 
+        func flushTable() {
+            if !tableRows.isEmpty { result.append(.table(tableRows)); tableRows = [] }
+        }
         func flush() {
-            if !paragraph.isEmpty { result.append(.paragraph(paragraph.joined(separator: " "))); paragraph = [] }
+            // Each source line stays its own line (models put "**Heading**" and its text on
+            // consecutive lines and expect them shown separately).
+            if !paragraph.isEmpty { result.append(.paragraph(paragraph.joined(separator: "\n"))); paragraph = [] }
+            flushTable()
         }
 
         for rawLine in markdown.components(separatedBy: "\n") {
@@ -96,8 +128,11 @@ struct MarkdownView: View {
                 flush(); result.append(.heading(min(level, 3), text)); continue
             }
             if line == "---" || line == "***" || line == "___" { flush(); result.append(.rule); continue }
-            if line.hasPrefix("- ") || line.hasPrefix("* ") || line.hasPrefix("+ ") {
-                flush(); result.append(.bullet(indent, String(line.dropFirst(2)))); continue
+            if line.hasPrefix("- ") || line.hasPrefix("* ") || line.hasPrefix("+ ") || line.hasPrefix("• ") {
+                var item = String(line.dropFirst(2))
+                if item.hasPrefix("[ ] ") { item = "☐ " + item.dropFirst(4) }
+                else if item.lowercased().hasPrefix("[x] ") { item = "☑ " + item.dropFirst(4) }
+                flush(); result.append(.bullet(indent, item)); continue
             }
             if let dot = line.firstIndex(where: { $0 == "." || $0 == ")" }),
                line[line.startIndex..<dot].allSatisfy(\.isNumber), dot > line.startIndex,
@@ -110,11 +145,15 @@ struct MarkdownView: View {
                 flush(); result.append(.quote(line.dropFirst().trimmingCharacters(in: .whitespaces))); continue
             }
             if line.hasPrefix("|") {
-                // Tables: keep rows readable, skip separator rows.
+                if !paragraph.isEmpty { let t = tableRows; tableRows = []; flush(); tableRows = t }
+                // Separator row (| --- | :-: |) only marks the header.
                 if line.replacingOccurrences(of: "|", with: "").allSatisfy({ "-: ".contains($0) }) { continue }
-                let cells = line.split(separator: "|").map { $0.trimmingCharacters(in: .whitespaces) }.filter { !$0.isEmpty }
-                flush(); result.append(.bullet(0, cells.joined(separator: "  ·  "))); continue
+                var body = Substring(line).dropFirst()
+                if body.hasSuffix("|") { body = body.dropLast() }
+                tableRows.append(body.components(separatedBy: "|").map { $0.trimmingCharacters(in: .whitespaces) })
+                continue
             }
+            flushTable()
             paragraph.append(line)
         }
         if let c = code { result.append(.code(c.joined(separator: "\n"))) }
