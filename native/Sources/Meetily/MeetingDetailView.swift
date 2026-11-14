@@ -44,7 +44,6 @@ struct MeetingDetailView: View {
                 .labelsHidden()
                 .fixedSize()
             }
-            .sharedBackgroundVisibility(.hidden)
             ToolbarItemGroup {
                 if model.isSummarizing {
                     Button { Task { await model.cancelSummary() } } label: {
