@@ -9,12 +9,7 @@ struct LiveRecordingView: View {
                 LazyVStack(alignment: .leading, spacing: 14) {
                     header
                     if app.liveSegments.isEmpty {
-                        HStack(spacing: 10) {
-                            ProgressView().controlSize(.small)
-                            Text(app.phase == .starting ? "Starting the microphone…" : "Listening. The transcript shows up here as people talk.")
-                                .foregroundStyle(.secondary)
-                        }
-                        .padding(.top, 8)
+                        ProgressView().controlSize(.small).padding(.top, 8)
                     }
                     ForEach(app.liveSegments) { seg in
                         TranscriptRow(time: seg.start, text: seg.text, dimmed: seg.isPartial)
@@ -36,11 +31,13 @@ struct LiveRecordingView: View {
     }
 
     private var header: some View {
-        VStack(alignment: .leading, spacing: 4) {
-            Text("Live Transcript")
+        HStack(alignment: .firstTextBaseline) {
+            Text(app.currentMeetingName)
                 .font(.largeTitle.weight(.semibold))
-            Text(app.micDevice.isEmpty ? "Default microphone" : app.micDevice)
-                .foregroundStyle(.secondary)
+            Spacer()
+            if let level = app.audioLevels[app.micDevice], level > 0 {
+                ProgressView(value: min(level, 1)).frame(width: 80)
+            }
         }
         .padding(.bottom, 6)
     }

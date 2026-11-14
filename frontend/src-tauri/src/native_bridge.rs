@@ -35,6 +35,11 @@ const EVENTS: &[&str] = &[
     "transcription-complete", "transcription-error", "transcription-progress",
     "transcription-queue-complete", "transcription-started", "transcription-warning",
     "summary-progress", "summary-complete", "summary-error",
+    "import-progress", "import-complete", "import-error",
+    "retranscription-progress", "retranscription-complete", "retranscription-error",
+    "parakeet-model-download-error", "ollama-model-download-progress",
+    "ollama-model-download-complete", "ollama-model-download-error",
+    "recording-shutdown-progress",
 ];
 
 pub fn is_headless() -> bool {

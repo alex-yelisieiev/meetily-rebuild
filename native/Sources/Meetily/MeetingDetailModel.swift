@@ -15,7 +15,16 @@ final class MeetingDetailModel {
     var summaryMarkdown: String?
     var summaryStatus = "idle"
     var summaryError: String?
+    private var summaryData: [String: Any] = [:]
     private var pollTask: Task<Void, Never>?
+
+    /// Extra context for the AI (people involved, objective, …).
+    var customPrompt = ""
+    /// Per-meeting summary language; nil = Auto.
+    var summaryLanguage: String?
+    var editing = false
+    var draft = ""
+    var saving = false
 
     init(meetingId: String) { self.meetingId = meetingId }
 
@@ -50,12 +59,62 @@ final class MeetingDetailModel {
             loadError = error.localizedDescription
         }
         await loadSummary()
+        summaryLanguage = Self.language(from: try? await engine.call("api_get_meeting_summary_language", ["meetingId": meetingId]))
         if isSummarizing { startPolling() }
+    }
+
+    private static func language(from raw: Any?) -> String? {
+        let v = (raw as? [String: Any])?["language"] ?? raw
+        guard let s = v as? String, !s.isEmpty else { return nil }
+        return s.lowercased()
+    }
+
+    func setSummaryLanguage(_ code: String?) async {
+        summaryLanguage = code
+        if let code { Prefs.addRecentSummaryLanguage(code) }
+        _ = try? await engine.call("api_save_meeting_summary_language", ["meetingId": meetingId, "summaryLanguage": code ?? NSNull()])
+    }
+
+    /// Same order as the original: per-meeting choice, pinned default, cached detection, fresh detection.
+    private func resolveSummaryLanguage() async -> String? {
+        if let l = summaryLanguage { return l }
+        if let pinned = Prefs.summaryLanguageDefault {
+            await setSummaryLanguage(pinned)
+            return pinned
+        }
+        if let cached = Self.language(from: try? await engine.call("api_get_meeting_detected_summary_language", ["meetingId": meetingId])) {
+            return cached
+        }
+        let texts = lines.map(\.text)
+        guard let r = try? await engine.call("api_detect_transcript_summary_language", ["transcriptTexts": texts]) as? [String: Any],
+              let l = Self.language(from: r) else { return nil }
+        _ = try? await engine.call("api_save_meeting_detected_summary_language", ["meetingId": meetingId, "detectedSummaryLanguage": l])
+        return l
+    }
+
+    func beginEditing() {
+        draft = summaryMarkdown ?? ""
+        editing = true
+    }
+
+    func saveEdits() async {
+        saving = true
+        defer { saving = false }
+        var data = summaryData
+        data["markdown"] = draft
+        data["summary_json"] = nil
+        do {
+            try await engine.call("api_save_meeting_summary", ["meetingId": meetingId, "summary": data])
+            summaryData = data
+            summaryMarkdown = draft
+            editing = false
+        } catch { summaryError = error.localizedDescription }
     }
 
     func loadSummary() async {
         guard let r = try? await engine.call("api_get_summary", ["meetingId": meetingId]) as? [String: Any] else { return }
         summaryStatus = ((r["status"] as? String) ?? "idle").lowercased()
+        summaryData = (r["data"] as? [String: Any]) ?? [:]
         summaryMarkdown = SummaryContent.markdown(from: r["data"])
         summaryError = r["error"] as? String
         if summaryMarkdown != nil && !isSummarizing { summaryStatus = "completed" }
@@ -67,18 +126,20 @@ final class MeetingDetailModel {
             summaryError = "This meeting has no transcript to summarize."; return
         }
         summaryError = nil
+        editing = false
         summaryStatus = "processing"
         do {
             let cfg = try await engine.call("api_get_model_config") as? [String: Any]
-            guard let provider = cfg?["provider"] as? String, let model = cfg?["model"] as? String else {
+            guard let provider = cfg?["provider"] as? String, let model = cfg?["model"] as? String, !model.isEmpty else {
                 summaryStatus = "failed"
                 summaryError = "Pick a summary model in Settings first."
                 return
             }
+            let language = await resolveSummaryLanguage()
             try await engine.call("api_process_transcript", [
                 "text": text, "model": provider, "modelName": model, "meetingId": meetingId,
-                "chunkSize": 40000, "overlap": 1000, "customPrompt": "",
-                "templateId": template, "summaryLanguage": NSNull(),
+                "chunkSize": 40000, "overlap": 1000, "customPrompt": customPrompt,
+                "templateId": template, "summaryLanguage": language ?? NSNull(),
             ])
             startPolling()
         } catch {
@@ -105,6 +166,7 @@ final class MeetingDetailModel {
                 if ["completed", "failed", "error", "cancelled"].contains(status) {
                     summaryStatus = status
                     summaryMarkdown = SummaryContent.markdown(from: r["data"]) ?? summaryMarkdown
+                    if let d = r["data"] as? [String: Any] { summaryData = d }
                     summaryError = status == "completed" ? nil : ((r["error"] as? String) ?? "Summary generation \(status).")
                     return
                 }

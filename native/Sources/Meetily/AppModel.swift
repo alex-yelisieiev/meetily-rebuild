@@ -1,6 +1,7 @@
 import Foundation
 import SwiftUI
 import AppKit
+import UniformTypeIdentifiers
 
 let liveSelectionID = "__live_recording__"
 
@@ -28,16 +29,44 @@ final class AppModel {
     var currentMeetingName = ""
 
     var devices: [AudioDevice] = []
-    var micDevice: String = UserDefaults.standard.string(forKey: "micDevice") ?? "" {
-        didSet { UserDefaults.standard.set(micDevice, forKey: "micDevice") }
+    /// The engine's recording_preferences.json (devices carry " (input)" / " (output)" suffixes).
+    var recordingPrefs: [String: Any] = [:]
+    var micDevice: String { Self.bare(recordingPrefs["preferred_mic_device"]) }
+    var systemDevice: String { Self.bare(recordingPrefs["preferred_system_device"]) }
+    var summaryTemplate: String = Prefs.summaryTemplate { didSet { Prefs.summaryTemplate = summaryTemplate } }
+    var primaryLanguage: String = Prefs.primaryLanguage {
+        didSet {
+            Prefs.primaryLanguage = primaryLanguage
+            Task { try? await engine.call("set_language_preference", ["language": primaryLanguage]) }
+        }
     }
-    var systemDevice: String = UserDefaults.standard.string(forKey: "systemDevice") ?? "" {
-        didSet { UserDefaults.standard.set(systemDevice, forKey: "systemDevice") }
-    }
-    var summaryTemplate: String = UserDefaults.standard.string(forKey: "summaryTemplate") ?? "standard_meeting" {
-        didSet { UserDefaults.standard.set(summaryTemplate, forKey: "summaryTemplate") }
-    }
+    var isAutoSummary: Bool = Prefs.isAutoSummary { didSet { Prefs.isAutoSummary = isAutoSummary } }
+    var importAndRetranscribe: Bool = Prefs.importAndRetranscribe { didSet { Prefs.importAndRetranscribe = importAndRetranscribe } }
     var templates: [Template] = []
+
+    /// Meetings that should get a summary as soon as their detail view opens.
+    var autoSummaryPending: Set<String> = []
+    var importJob: ImportJob?
+    var retranscribeJobs: [String: JobProgress] = [:]
+    /// Download progress keyed by "<kind>:<model>", e.g. "whisper:large-v3".
+    var downloads: [String: Double] = [:]
+    var downloadRevision = 0
+    var audioLevels: [String: Double] = [:]
+    var recovery: PendingRecording.Snapshot?
+    private var snapshotTask: Task<Void, Never>?
+    private var currentFolder: String?
+
+    struct JobProgress: Equatable { var percent: Double; var message: String; var failed: String? }
+    struct ImportJob: Equatable {
+        var path: String; var filename: String; var duration: Double
+        var title: String; var running = false; var progress: JobProgress?
+    }
+
+    static func bare(_ v: Any?) -> String {
+        guard let s = v as? String else { return "" }
+        for suffix in [" (input)", " (output)"] where s.hasSuffix(suffix) { return String(s.dropLast(suffix.count)) }
+        return s
+    }
 
     var banner: String?
     private var bannerTask: Task<Void, Never>?
@@ -68,6 +97,9 @@ final class AppModel {
         do {
             try await engine.start()
             engineState = .ready
+            try? await engine.call("set_language_preference", ["language": primaryLanguage])
+            await loadRecordingPrefs()
+            recovery = PendingRecording.load()
             await reloadMeetings()
             await loadDevices()
             templates = (try? await engine.call("api_list_templates", as: [Template].self)) ?? []
@@ -99,6 +131,22 @@ final class AppModel {
         result.sort { ($0.createdAt ?? .distantPast) > ($1.createdAt ?? .distantPast) }
         meetings = result
     }
+
+    func loadRecordingPrefs() async {
+        if let p = try? await engine.call("get_recording_preferences") as? [String: Any] { recordingPrefs = p }
+    }
+
+    func setRecordingPref(_ key: String, _ value: Any?) async {
+        var p = recordingPrefs
+        p[key] = value ?? NSNull()
+        do {
+            try await engine.call("set_recording_preferences", ["preferences": p])
+            recordingPrefs = p
+        } catch { show(error) }
+    }
+
+    func setMic(_ name: String) async { await setRecordingPref("preferred_mic_device", name.isEmpty ? nil : "\(name) (input)") }
+    func setSystemAudio(_ name: String) async { await setRecordingPref("preferred_system_device", name.isEmpty ? nil : "\(name) (output)") }
 
     func loadDevices() async {
         devices = (try? await engine.call("get_audio_devices", as: [AudioDevice].self)) ?? []
@@ -173,12 +221,15 @@ final class AppModel {
         selection = liveSelectionID
         do {
             try await engine.call("start_recording_with_devices_and_meeting", [
-                "micDeviceName": micDevice.isEmpty ? NSNull() : micDevice,
-                "systemDeviceName": systemDevice.isEmpty ? NSNull() : systemDevice,
+                "micDeviceName": recordingPrefs["preferred_mic_device"] as? String ?? NSNull(),
+                "systemDeviceName": recordingPrefs["preferred_system_device"] as? String ?? NSNull(),
                 "meetingName": currentMeetingName,
             ])
             recordingStartedAt = Date()
             phase = .recording
+            currentFolder = try? await engine.call("get_meeting_folder_path") as? String
+            saveSnapshot()
+            if StorePrefs.showRecordingNotification { showRecordingNotice() }
         } catch {
             phase = .idle
             selection = nil
@@ -255,9 +306,12 @@ final class AppModel {
                 "folderPath": stoppedFolder.map { $0 as Any } ?? NSNull(),
             ]) as? [String: Any]
             await reloadMeetings()
+            PendingRecording.clear()
             phase = .idle
             liveSegments = []
-            selection = (result?["meeting_id"] as? String) ?? meetings.first?.id
+            let newId = (result?["meeting_id"] as? String) ?? meetings.first?.id
+            if isAutoSummary, let newId { autoSummaryPending.insert(newId) }
+            selection = newId
         } catch {
             phase = .idle
             show(error)
@@ -281,6 +335,7 @@ final class AppModel {
                     liveSegments.append(seg)
                 }
             }
+            if !seg.isPartial { scheduleSnapshot() }
         case "recording-stopped":
             if let d = payload as? [String: Any] {
                 stoppedFolder = d["folder_path"] as? String
@@ -298,9 +353,214 @@ final class AppModel {
             Task { await loadDevices() }
         case "request-recording-toggle":
             Task { await toggleRecording() }
+        case "import-progress":
+            if let d = payload as? [String: Any] {
+                importJob?.progress = JobProgress(percent: Self.num(d["progress_percentage"]), message: (d["message"] as? String) ?? "", failed: nil)
+            }
+        case "import-complete":
+            let d = payload as? [String: Any]
+            importJob = nil
+            Task {
+                await reloadMeetings()
+                if let id = d?["meeting_id"] as? String {
+                    if isAutoSummary { autoSummaryPending.insert(id) }
+                    selection = id
+                }
+            }
+        case "import-error":
+            let msg = ((payload as? [String: Any])?["error"] as? String) ?? EngineClient.describe(payload)
+            importJob?.running = false
+            importJob?.progress = JobProgress(percent: 0, message: "", failed: msg)
+        case "retranscription-progress", "retranscription-complete", "retranscription-error":
+            guard let d = payload as? [String: Any], let id = d["meeting_id"] as? String else { return }
+            if event == "retranscription-progress" {
+                retranscribeJobs[id] = JobProgress(percent: Self.num(d["progress_percentage"]), message: (d["message"] as? String) ?? "", failed: nil)
+            } else if event == "retranscription-complete" {
+                retranscribeJobs[id] = nil
+                detailRevision += 1
+                flash("Re-transcription finished.")
+            } else {
+                retranscribeJobs[id] = JobProgress(percent: 0, message: "", failed: (d["error"] as? String) ?? "Re-transcription failed.")
+            }
+        case "model-download-progress", "parakeet-model-download-progress", "builtin-ai-download-progress", "ollama-model-download-progress":
+            guard let d = payload as? [String: Any],
+                  let name = (d["modelName"] as? String) ?? (d["model"] as? String) ?? (d["model_name"] as? String) else { return }
+            let key = Self.downloadKind(event) + ":" + name
+            let status = d["status"] as? String
+            if status == "cancelled" || status == "completed" || status == "error" {
+                downloads[key] = nil; downloadRevision += 1
+            } else {
+                downloads[key] = Self.num(d["progress"])
+            }
+        case "model-download-complete", "parakeet-model-download-complete", "ollama-model-download-complete",
+             "model-download-error", "parakeet-model-download-error", "ollama-model-download-error":
+            let d = payload as? [String: Any]
+            if let name = (d?["modelName"] as? String) ?? (d?["model"] as? String) ?? (d?["model_name"] as? String) {
+                downloads[Self.downloadKind(event) + ":" + name] = nil
+            } else {
+                downloads = downloads.filter { !$0.key.hasPrefix(Self.downloadKind(event) + ":") }
+            }
+            if event.hasSuffix("error") { flash((d?["error"] as? String) ?? "The model download failed.") }
+            downloadRevision += 1
+        case "audio-levels":
+            guard let d = payload as? [String: Any], let levels = d["levels"] as? [[String: Any]] else { return }
+            for l in levels {
+                if let n = l["device_name"] as? String { audioLevels[n] = Self.num(l["rms_level"]) }
+            }
         default:
             break
         }
+    }
+
+    nonisolated static func num(_ v: Any?) -> Double {
+        if let d = v as? Double { return d }
+        if let i = v as? Int { return Double(i) }
+        if let n = v as? NSNumber { return n.doubleValue }
+        return 0
+    }
+
+    static func downloadKind(_ event: String) -> String {
+        if event.hasPrefix("parakeet") { return "parakeet" }
+        if event.hasPrefix("builtin") { return "builtin" }
+        if event.hasPrefix("ollama") { return "ollama" }
+        return "whisper"
+    }
+
+    // MARK: Recording notice
+
+    private func showRecordingNotice() {
+        let alert = NSAlert()
+        alert.messageText = "Recording started"
+        alert.informativeText = "Let everyone in the meeting know it's being recorded."
+        alert.addButton(withTitle: "I've Told Them")
+        alert.showsSuppressionButton = true
+        alert.suppressionButton?.title = "Don't remind me again"
+        let finish: (NSApplication.ModalResponse) -> Void = { _ in
+            if alert.suppressionButton?.state == .on { StorePrefs.showRecordingNotification = false }
+        }
+        if let window = NSApp.keyWindow ?? NSApp.windows.first(where: { $0.isVisible }) {
+            alert.beginSheetModal(for: window, completionHandler: finish)
+        } else {
+            finish(alert.runModal())
+        }
+    }
+
+    // MARK: Crash recovery
+
+    private func scheduleSnapshot() {
+        snapshotTask?.cancel()
+        snapshotTask = Task {
+            try? await Task.sleep(for: .seconds(2))
+            guard !Task.isCancelled else { return }
+            saveSnapshot()
+        }
+    }
+
+    private func saveSnapshot() {
+        guard isRecording else { return }
+        let segs = liveSegments.filter { !$0.isPartial && !$0.text.isEmpty }.map {
+            PendingRecording.Segment(sequence: $0.sequence, text: $0.text, timestamp: $0.timestamp, start: $0.start, end: $0.end, duration: $0.duration)
+        }
+        PendingRecording.save(.init(name: currentMeetingName, folder: currentFolder, startedAt: recordingStartedAt ?? Date(), segments: segs))
+    }
+
+    func recoverPending() async {
+        guard let snap = recovery else { return }
+        var audioNote = ""
+        if let folder = snap.folder, (try? await engine.call("has_audio_checkpoints", ["meetingFolder": folder]) as? Bool) == true {
+            if let r = try? await engine.call("recover_audio_from_checkpoints", ["meetingFolder": folder, "sampleRate": 48000]) as? [String: Any] {
+                if (r["status"] as? String) == "success" || (r["status"] as? String) == "partial" {
+                    try? await engine.call("cleanup_checkpoints", ["meetingFolder": folder])
+                } else { audioNote = " The audio couldn't be recovered." }
+            }
+        }
+        let payload: [[String: Any]] = snap.segments.sorted { $0.start < $1.start }.map {
+            ["id": "seg-\($0.sequence)", "text": $0.text, "timestamp": $0.timestamp,
+             "audio_start_time": $0.start, "audio_end_time": $0.end, "duration": $0.duration]
+        }
+        do {
+            let result = try await engine.call("api_save_transcript", [
+                "meetingTitle": snap.name, "transcripts": payload,
+                "folderPath": snap.folder.map { $0 as Any } ?? NSNull(),
+            ]) as? [String: Any]
+            PendingRecording.clear()
+            recovery = nil
+            await reloadMeetings()
+            selection = (result?["meeting_id"] as? String) ?? meetings.first?.id
+            flash("Recovered “\(snap.name)”." + audioNote)
+        } catch { show(error) }
+    }
+
+    func discardPending() async {
+        if let folder = recovery?.folder { try? await engine.call("cleanup_checkpoints", ["meetingFolder": folder]) }
+        PendingRecording.clear()
+        recovery = nil
+    }
+
+    // MARK: Import audio
+
+    static let audioExtensions = ["mp4", "m4a", "wav", "mp3", "flac", "ogg", "aac", "webm", "mkv", "wma", "mov"]
+
+    func chooseAudioToImport() {
+        let panel = NSOpenPanel()
+        panel.allowedContentTypes = Self.audioExtensions.compactMap { UTType(filenameExtension: $0) }
+        panel.allowsMultipleSelection = false
+        panel.message = "Choose an audio or video file to transcribe"
+        if panel.runModal() == .OK, let url = panel.url { Task { await prepareImport(url) } }
+    }
+
+    func prepareImport(_ url: URL) async {
+        guard importAndRetranscribe else { flash("Turn on Import & Retranscribe in Settings › Beta first."); return }
+        guard importJob?.running != true else { return }
+        do {
+            let info = try await engine.call("validate_audio_file_command", ["path": url.path]) as? [String: Any]
+            let filename = (info?["filename"] as? String) ?? url.lastPathComponent
+            importJob = ImportJob(path: (info?["path"] as? String) ?? url.path, filename: filename,
+                                  duration: Self.num(info?["duration_seconds"]),
+                                  title: (filename as NSString).deletingPathExtension)
+        } catch { show(error) }
+    }
+
+    func startImport(title: String, language: String) async {
+        guard var job = importJob else { return }
+        job.title = title; job.running = true; job.progress = JobProgress(percent: 0, message: "Starting…", failed: nil)
+        importJob = job
+        let cfg = try? await engine.call("api_get_transcript_config") as? [String: Any]
+        do {
+            try await engine.call("start_import_audio_command", [
+                "sourcePath": job.path, "title": title,
+                "language": (language == "auto" || language == "auto-translate") ? NSNull() : language,
+                "model": (cfg?["model"] as? String) ?? NSNull(), "provider": (cfg?["provider"] as? String) ?? NSNull(),
+            ])
+        } catch {
+            importJob?.running = false
+            importJob?.progress = JobProgress(percent: 0, message: "", failed: error.localizedDescription)
+        }
+    }
+
+    func cancelImport() async {
+        if importJob?.running == true { try? await engine.call("cancel_import_command") }
+        importJob = nil
+    }
+
+    func startRetranscribe(meetingId: String, folder: String, language: String) async {
+        retranscribeJobs[meetingId] = JobProgress(percent: 0, message: "Starting…", failed: nil)
+        let cfg = try? await engine.call("api_get_transcript_config") as? [String: Any]
+        let provider = cfg?["provider"] as? String
+        do {
+            try await engine.call("start_retranscription_command", [
+                "meetingId": meetingId, "meetingFolderPath": folder,
+                "language": (provider == "parakeet" || language == "auto") ? NSNull() : language,
+                "model": (cfg?["model"] as? String) ?? NSNull(), "provider": provider ?? NSNull(),
+            ])
+        } catch {
+            retranscribeJobs[meetingId] = JobProgress(percent: 0, message: "", failed: error.localizedDescription)
+        }
+    }
+
+    func cancelRetranscribe(meetingId: String) async {
+        try? await engine.call("cancel_retranscription_command")
+        retranscribeJobs[meetingId] = nil
     }
 
     // MARK: Banner

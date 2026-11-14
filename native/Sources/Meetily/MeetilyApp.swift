@@ -26,6 +26,11 @@ struct MeetilyApp: App {
                 }
                 .keyboardShortcut("p", modifiers: [.command, .shift])
                 .disabled(!(app.phase == .recording || app.phase == .paused))
+
+                Divider()
+                Button("Import Audio…") { app.chooseAudioToImport() }
+                    .keyboardShortcut("i", modifiers: [.command, .shift])
+                    .disabled(app.engineState != .ready || !app.importAndRetranscribe || app.importJob?.running == true)
             }
         }
 
