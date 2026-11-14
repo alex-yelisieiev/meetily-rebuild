@@ -282,17 +282,7 @@ private struct TranscriptionSettings: View {
             }
             Section("Models") {
                 if provider == "localWhisper" {
-                    HStack {
-                        VStack(alignment: .leading, spacing: 2) {
-                            HStack(spacing: 6) {
-                                Text("Whisper large-v3 (MLX)")
-                                if current == mlxModel { Image(systemName: "checkmark.circle.fill").foregroundStyle(.tint) }
-                            }
-                            Text("Runs on the Apple GPU").font(.caption).foregroundStyle(.secondary)
-                        }
-                        Spacer()
-                        if current != mlxModel { Button("Use") { Task { await use(mlxModel) } } }
-                    }
+                    MLXModelRow(selected: current == mlxModel, onUse: { Task { await use(mlxModel) } })
                 }
                 ForEach(models) { m in
                     ModelManagerRow(
@@ -633,5 +623,87 @@ private struct AboutSettings: View {
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .padding()
+    }
+}
+
+
+/// The MLX large-v3 row: runtime setup, 3 GB model download with progress, delete.
+private struct MLXModelRow: View {
+    let selected: Bool
+    let onUse: () -> Void
+    @State private var mlx = MLXManager.shared
+    @State private var confirmDelete = false
+
+    var body: some View {
+        if let reason = MLXManager.unsupportedReason { unsupported(reason) } else { row }
+    }
+
+    private func unsupported(_ reason: String) -> some View {
+        HStack(alignment: .top, spacing: 10) {
+            Image(systemName: "nosign").font(.title3).foregroundStyle(.secondary)
+            VStack(alignment: .leading, spacing: 3) {
+                HStack(spacing: 6) {
+                    Text("Whisper large-v3 (MLX)").strikethrough(color: .secondary)
+                    Text("Not supported by your hardware").font(.caption.weight(.semibold))
+                        .padding(.horizontal, 7).padding(.vertical, 2)
+                        .background(.red.opacity(0.15), in: .capsule).foregroundStyle(.red)
+                }
+                Text(reason).font(.caption).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
+            }
+            Spacer()
+        }
+        .padding(10)
+        .background(.quaternary.opacity(0.5), in: .rect(cornerRadius: 10))
+        .opacity(0.8)
+        .allowsHitTesting(false)
+        .accessibilityElement(children: .combine)
+    }
+
+    private var row: some View {
+        HStack {
+            VStack(alignment: .leading, spacing: 2) {
+                HStack(spacing: 6) {
+                    Text("Whisper large-v3 (MLX)")
+                    if selected && mlx.modelReady && mlx.runtimeReady { Image(systemName: "checkmark.circle.fill").foregroundStyle(.tint) }
+                }
+                Text(subtitle).font(.caption).foregroundStyle(isFailed ? AnyShapeStyle(.red) : AnyShapeStyle(.secondary))
+                    .lineLimit(2)
+            }
+            Spacer()
+            switch mlx.phase {
+            case .runtime:
+                ProgressView().controlSize(.small)
+                Button("Cancel") { mlx.cancel() }
+            case .model(let p):
+                ProgressView(value: min(p, 100), total: 100).frame(width: 110)
+                Button("Cancel") { mlx.cancel() }
+            default:
+                if mlx.modelReady && mlx.runtimeReady {
+                    if !selected { Button("Use", action: onUse) }
+                    Button(role: .destructive) { confirmDelete = true } label: { Image(systemName: "trash") }
+                        .buttonStyle(.borderless).help("Delete the model")
+                } else {
+                    Button(isFailed ? "Retry" : "Download") { mlx.install() }
+                }
+            }
+        }
+        .onAppear { mlx.refresh() }
+        .confirmationDialog("Delete the MLX model (\(mlx.modelSizeMB) MB)?", isPresented: $confirmDelete) {
+            Button("Delete", role: .destructive) { mlx.deleteModel() }
+        }
+    }
+
+    private var isFailed: Bool { if case .failed = mlx.phase { return true }; return false }
+
+    private var subtitle: String {
+        switch mlx.phase {
+        case .runtime(let s): return s
+        case .model(let p): return String(format: "Downloading… %.0f%% of %.1f GB", p, Double(MLXManager.modelDownloadMB) / 1024)
+        case .failed(let e): return e
+        case .idle:
+            if !mlx.modelReady { return String(format: "Runs on the Apple GPU · %.1f GB download", Double(MLXManager.modelDownloadMB) / 1024) }
+            if !mlx.runtimeReady { return "Runs on the Apple GPU · needs a one-time setup" }
+            return "Runs on the Apple GPU · \(mlx.modelSizeMB) MB"
+        }
     }
 }

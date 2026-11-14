@@ -6,6 +6,10 @@ struct MeetilyApp: App {
     @NSApplicationDelegateAdaptor(AppDelegate.self) private var delegate
     @State private var app = AppModel()
 
+    init() {
+        if CommandLine.arguments.contains("--mlx-selftest") { MLXSelfTest.runBlocking() }
+    }
+
     var body: some Scene {
         Window("Meetily", id: "main") {
             ContentView()

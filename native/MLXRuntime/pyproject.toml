@@ -1,0 +1,8 @@
+[project]
+name = "transcribe-meetily"
+version = "0.1.0"
+description = "Re-transcribe all Meetily recordings locally with OpenAI Whisper large-v3"
+requires-python = ">=3.12,<3.13"
+dependencies = [
+    "mlx-whisper>=0.4.2",
+]

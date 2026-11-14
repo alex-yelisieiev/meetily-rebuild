@@ -99,6 +99,7 @@ final class AppModel {
         do {
             try await engine.start()
             engineState = .ready
+            MLXManager.shared.ensureRuntimeInBackground()
             try? await engine.call("set_language_preference", ["language": primaryLanguage])
             await loadRecordingPrefs()
             recovery = PendingRecording.load()

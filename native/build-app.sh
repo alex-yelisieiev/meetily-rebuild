@@ -15,6 +15,7 @@ mkdir -p "$OUT/Contents/MacOS" "$OUT/Contents/Resources" "$OUT/Contents/Library/
 cp .build/release/Meetily "$OUT/Contents/MacOS/Meetily"
 cp Info.plist "$OUT/Contents/Info.plist"
 cp Resources/AppIcon.icns "$OUT/Contents/Resources/AppIcon.icns"
+ditto MLXRuntime "$OUT/Contents/Resources/MLXRuntime"
 ditto "$ENGINE_SRC" "$ENGINE"
 
 # The engine never shows UI of its own.
