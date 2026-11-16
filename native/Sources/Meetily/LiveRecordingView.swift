@@ -121,7 +121,7 @@ struct TranscriptRow: View {
                 .foregroundStyle(.tertiary)
                 .frame(width: 52, alignment: .trailing)
             Text(text)
-                .font(.body)
+                .font(.system(size: ContentTypography.fontSize))
                 .lineSpacing(3)
                 .foregroundStyle(dimmed ? .secondary : .primary)
                 .textSelection(.enabled)
