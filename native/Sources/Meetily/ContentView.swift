@@ -78,10 +78,10 @@ struct RecordToolbarButton: View {
             .help("Show the live recording")
         case .starting, .finishing:
             // A bare ProgressView renders clipped and off-centre inside the toolbar's glass
-            // capsule, so show a disabled button with a rotating symbol instead.
+            // capsule, so show a disabled button with the animated progress.indicator symbol instead.
             Button {} label: {
-                Label(app.phase == .starting ? "Starting…" : "Saving…", systemImage: "arrow.trianglehead.2.clockwise")
-                    .symbolEffect(.rotate, options: .repeat(.continuous))
+                Label(app.phase == .starting ? "Starting…" : "Saving…", systemImage: "progress.indicator")
+                    .symbolEffect(.variableColor.iterative.dimInactiveLayers, options: .repeat(.continuous))
             }
             .disabled(true)
             .help(statusText)
