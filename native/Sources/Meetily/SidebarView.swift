@@ -11,7 +11,11 @@ struct SidebarView: View {
         List(selection: $app.selection) {
             if app.isRecording {
                 Section {
-                    Label {
+                    // Keep the dot on the "Recording" line instead of centred between title and timer.
+                    HStack(alignment: .firstTextBaseline, spacing: 8) {
+                        Image(systemName: "record.circle.fill")
+                            .foregroundStyle(.red)
+                            .symbolEffect(.pulse, isActive: app.phase == .recording)
                         VStack(alignment: .leading, spacing: 2) {
                             Text(app.phase == .paused ? "Paused" : "Recording")
                             TimelineView(.periodic(from: .now, by: 1)) { ctx in
@@ -20,10 +24,6 @@ struct SidebarView: View {
                                     .foregroundStyle(.secondary)
                             }
                         }
-                    } icon: {
-                        Image(systemName: "record.circle.fill")
-                            .foregroundStyle(.red)
-                            .symbolEffect(.pulse, isActive: app.phase == .recording)
                     }
                     .tag(liveSelectionID)
                 }
