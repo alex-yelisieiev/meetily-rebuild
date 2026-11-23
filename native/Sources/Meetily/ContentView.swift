@@ -77,8 +77,22 @@ struct RecordToolbarButton: View {
             .tint(.red)
             .help("Show the live recording")
         case .starting, .finishing:
-            ProgressView().controlSize(.small)
+            // A bare ProgressView renders clipped and off-centre inside the toolbar's glass
+            // capsule, so show a disabled button with a rotating symbol instead.
+            Button {} label: {
+                Label(app.phase == .starting ? "Starting…" : "Saving…", systemImage: "arrow.trianglehead.2.clockwise")
+                    .symbolEffect(.rotate, options: .repeat(.continuous))
+            }
+            .disabled(true)
+            .help(statusText)
         }
+    }
+}
+
+extension RecordToolbarButton {
+    private var statusText: String {
+        if case .finishing(let message) = app.phase { return message }
+        return "Starting the recording…"
     }
 }
 
