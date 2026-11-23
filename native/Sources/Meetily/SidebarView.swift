@@ -11,19 +11,22 @@ struct SidebarView: View {
         List(selection: $app.selection) {
             if app.isRecording {
                 Section {
-                    // Keep the dot on the "Recording" line instead of centred between title and timer.
-                    HStack(alignment: .firstTextBaseline, spacing: 8) {
-                        Image(systemName: "record.circle.fill")
-                            .foregroundStyle(.red)
-                            .symbolEffect(.pulse, isActive: app.phase == .recording)
-                        VStack(alignment: .leading, spacing: 2) {
+                    // The dot sits centred on the "Recording" line; the timer lines up under the title text.
+                    VStack(alignment: .leading, spacing: 2) {
+                        HStack(alignment: .center, spacing: 6) {
+                            Image(systemName: "circle.fill")
+                                .font(.system(size: 8))
+                                .foregroundStyle(.red)
+                                .frame(width: 12)
+                                .symbolEffect(.pulse, isActive: app.phase == .recording)
                             Text(app.phase == .paused ? "Paused" : "Recording")
-                            TimelineView(.periodic(from: .now, by: 1)) { ctx in
-                                Text(formatClock(app.elapsed(at: ctx.date)))
-                                    .font(.caption.monospacedDigit())
-                                    .foregroundStyle(.secondary)
-                            }
                         }
+                        TimelineView(.periodic(from: .now, by: 1)) { ctx in
+                            Text(formatClock(app.elapsed(at: ctx.date)))
+                                .font(.caption.monospacedDigit())
+                                .foregroundStyle(.secondary)
+                        }
+                        .padding(.leading, 18)
                     }
                     .tag(liveSelectionID)
                 }
